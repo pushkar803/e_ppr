@@ -5,8 +5,7 @@ import requests as rq
 import os, json
 from fpdf import FPDF
 from PIL import Image
-conn = sqlite3.connect('test.db')
-print("Opened database successfully");
+import shutil
 
 # app.py
 from flask import Flask, request, jsonify, send_file, send_from_directory
@@ -17,7 +16,9 @@ cors = CORS(app)
 app.config['CORS_HEADERS'] = 'Content-Type'
 
 DOWNLOAD_DIRECTORY = "files"
-
+DB_NAME = 'test.db'
+SNDND = True
+LIFE365 = False
 
 def download_file(url, file_path):
     local_filename = file_path
@@ -32,17 +33,13 @@ def download_file(url, file_path):
 
 def send_to_telegram(file_name, file_path):
 
-
 	url = "https://api.telegram.org/bot1707372708:AAGjhII7rN-tyV_ILkwou6zY-hsolObXxX0/sendDocument?chat_id=@e_ppr"
-
 	payload={}
 	files=[
 	  ('document',(file_name,open(file_path,'rb'),'image/jpeg'))
 	]
 	headers = {}
-
 	response = rq.request("GET", url, headers=headers, data=payload, files=files)
-
 	print(response.text)
 
 
@@ -62,7 +59,6 @@ def diver_program(d_obj,ppr_id):
 	if os.path.exists(folder_path) == False:
 		os.mkdir(folder_path)
 
-	
 	for i in range(1,17):
 		print("downloading "+str(i)+" page")
 
@@ -89,7 +85,7 @@ def diver_program(d_obj,ppr_id):
 	    new_imagelist.append(im2)
 
 	im1.save(r''+pdf_path,save_all=True, append_images=new_imagelist)
-	return context_identifier,pdf_path
+	return context_identifier,pdf_path,folder_path
 
 
 @app.route('/get-files/<path:path>',methods = ['GET','POST'])
@@ -111,7 +107,7 @@ def get_by_date():
 
     if date and ppr_id:
         date_object = datetime.strptime(date, '%d-%m-%Y').date()
-        context_identifier , pdf_path = diver_program(date_object,ppr_id)
+        context_identifier , pdf_path, folder_path = diver_program(date_object,ppr_id)
 
         generated_file_link = request.base_url.replace('query','get-files')+context_identifier+"/"+context_identifier+".pdf"
         return jsonify({
@@ -123,62 +119,97 @@ def get_by_date():
             "ERROR": "no date found, please send a date and ppr_id."
         })
 
-@app.route('/get_todays/', methods=['POST'])
+@app.route('/get_todays/', methods=['GET','POST'])
 @cross_origin()
 def get_todays():
 
 	try:
 
+		conn = sqlite3.connect(DB_NAME)
+		cursor = conn.cursor()
+		print("Connected database successfully");
+
 		#Sandhyanand
-		url = "https://sandhyanand.epapers.in/api/GetPublishedDates.php"
+		if SNDND == True:
+			print("############ sandhyanand started ###########")
 
-		payload="key=KTugmCg4FFwIqxxErBF7epCaobnYzURF"
-		headers = {
-		  'authority': 'sandhyanand.epapers.in',
-		  'x-requested-with': 'XMLHttpRequest',
-		  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36',
-		  'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-		  'origin': 'https://sandhyanand.epapers.in',
-		  'referer': 'https://sandhyanand.epapers.in/'
-		}
-		response = requests.request("POST", url, headers=headers, data=payload)
-		#print(response.text)
-		json_resp = json.loads(response.text)
-		#print(json_resp)
-		latest_date = json_resp[0]['DocumentDate']['date'].split(' ')[0]
-		print(latest_date)
-		date_object = datetime.strptime(latest_date, '%Y-%m-%d').date()
+			url = "https://sandhyanand.epapers.in/api/GetPublishedDates.php"
+			payload="key=KTugmCg4FFwIqxxErBF7epCaobnYzURF"
+			headers = {
+			  'authority': 'sandhyanand.epapers.in',
+			  'x-requested-with': 'XMLHttpRequest',
+			  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36',
+			  'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+			  'origin': 'https://sandhyanand.epapers.in',
+			  'referer': 'https://sandhyanand.epapers.in/'
+			}
+			response = requests.request("POST", url, headers=headers, data=payload)
+			#print(response.text)
+			json_resp = json.loads(response.text)
+			#print(json_resp)
+			latest_date = json_resp[0]['DocumentDate']['date'].split(' ')[0]
+			print(latest_date)
+			date_object = datetime.strptime(latest_date, '%Y-%m-%d').date()
 
-		ppr_id = 630
-		context_identifier , pdf_path = diver_program(date_object,ppr_id)
-		send_to_telegram("SND_"+context_identifier+".pdf", pdf_path)
-		conn.execute('''INSERT INTO SNDND (DATE,IsSent) VALUES (date('now'),1)''');
+			print("checking if already exists...")
+			cursor.execute( """SELECT `IsSent` from SNDND where `DATE` = ?""", (latest_date,))
+			records = cursor.fetchall()
+			print("records: ", str(len(records)))
 
+			if len(records) == 0:
+				ppr_id = 630
+				context_identifier , pdf_path, folder_path = diver_program(date_object,ppr_id)
+				send_to_telegram("SND_"+context_identifier+".pdf", pdf_path)
+				shutil.rmtree(folder_path)
+				cursor.execute("""INSERT INTO SNDND (`DATE`,`IsSent`) VALUES (?,?)""",(latest_date,1))
+				conn.commit()
+			else:
+				print("ppr already downloaded.")
 
+			print("############ sandhyanand end ###########")
 
 		#life365
-		url = "https://life365.epapers.in/api/GetPublishedDates.php"
+		if LIFE365 == True:
+			print("############ life365 started ###########")
 
-		payload="key=KTugmCg4FFwIqxxErBF7epCaobnYzURF"
-		headers = {
-		  'authority': 'life365.epapers.in',
-		  'x-requested-with': 'XMLHttpRequest',
-		  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36',
-		  'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
-		  'origin': 'https://life365.epapers.in',
-		  'referer': 'https://life365.epapers.in/'
-		}
-		response = requests.request("POST", url, headers=headers, data=payload)
-		#print(response.text)
-		json_resp = json.loads(response.text)
-		#print(json_resp)
-		latest_date = json_resp[0]['DocumentDate']['date'].split(' ')[0]
-		print(latest_date)
-		date_object = datetime.strptime(latest_date, '%Y-%m-%d').date()
-		ppr_id = 635
-		context_identifier , pdf_path = diver_program(date_object,ppr_id)
-		send_to_telegram("L365_"+context_identifier+".pdf", pdf_path)
-		conn.execute('''INSERT INTO SNDND (DATE,IsSent) VALUES (date('now'),1)''');
+			url = "https://life365.epapers.in/api/GetPublishedDates.php"
+			payload="key=KTugmCg4FFwIqxxErBF7epCaobnYzURF"
+			headers = {
+			  'authority': 'life365.epapers.in',
+			  'x-requested-with': 'XMLHttpRequest',
+			  'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/89.0.4389.114 Safari/537.36',
+			  'content-type': 'application/x-www-form-urlencoded; charset=UTF-8',
+			  'origin': 'https://life365.epapers.in',
+			  'referer': 'https://life365.epapers.in/'
+			}
+			response = requests.request("POST", url, headers=headers, data=payload)
+			#print(response.text)
+			json_resp = json.loads(response.text)
+			#print(json_resp)
+			latest_date = json_resp[0]['DocumentDate']['date'].split(' ')[0]
+			print(latest_date)
+			date_object = datetime.strptime(latest_date, '%Y-%m-%d').date()
+
+			print("checking if already exists...")
+			cursor.execute( """SELECT `IsSent` from LIFE365 where `DATE` = ?""", (latest_date,))
+			records = cursor.fetchall()
+			print("records: ", str(len(records)))
+
+			if len(records) == 0:
+				ppr_id = 635
+				context_identifier , pdf_path, folder_path = diver_program(date_object,ppr_id)
+				send_to_telegram("L365_"+context_identifier+".pdf", pdf_path)
+				shutil.rmtree(folder_path)
+				cursor.execute("""INSERT INTO LIFE365 (`DATE`,`IsSent`) VALUES (?,?)""",(latest_date,1))
+				conn.commit()
+			else:
+				print("ppr already downloaded.")
+
+			print("############ life365 end ###########")
+
+			cursor.close()
+			if conn:
+				conn.close()
 
 		return jsonify({
             "SUCCESS": "found and sent sucess"
