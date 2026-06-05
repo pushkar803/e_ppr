@@ -1,0 +1,8 @@
+{
+  "$schema": "https://railway.com/railway.schema.json",
+  "deploy": {
+    "startCommand": "./send_latest.sh",
+    "cronSchedule": "0,30 3-7 * * *",
+    "restartPolicyType": "never"
+  }
+}
